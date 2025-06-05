@@ -14,8 +14,8 @@ pipeline {
         stage('Install Docker Compose') {
             steps {
                 sh '''
-                  sudo curl -SL "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-                  sudo chmod +x /usr/local/bin/docker-compose
+                  curl -SL "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+                  chmod +x /usr/local/bin/docker-compose
                   docker-compose --version
                 '''
             }
