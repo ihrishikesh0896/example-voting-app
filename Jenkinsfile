@@ -4,7 +4,7 @@ pipeline {
     environment {
         DOCKER_COMPOSE_VERSION = '2.24.6'
         REGISTRY = 'your-registry.com'  // Optional: for pushing images
-        TAG = "${BUILD_NUMBER}"
+        TAG = "latest"
         SERVICES = 'vote,result,worker,seed-data'
     }
 
