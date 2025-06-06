@@ -12,22 +12,21 @@ pipeline {
                 git 'https://github.com/ihrishikesh0896/example-voting-app.git'
             }
         }
+
         stage('Build Images') {
             steps {
                 sh 'docker compose build'
             }
         }
+
         stage('Parallel Image Scan') {
             steps {
                 script {
                     def services = ['vote', 'result', 'worker', 'seed-data']
                     def scanStages = [:]
-
                     for (svc in services) {
-                        // IMPORTANT: closure variable must be final/effectively final for parallel
-                        def svcName = svc
-                        scanStages["Scan ${svcName}"] = {
-                            def imageName = "${env.JOB_NAME}-${svcName}:${env.TAG}"
+                        def imageName = "${env.JOB_NAME}-${svc}:${env.TAG}"
+                        scanStages["Scan ${svc}"] = {
                             def IMAGE_ID = sh(
                                 script: "docker images --no-trunc --format '{{.ID}}' ${imageName}",
                                 returnStdout: true
@@ -43,11 +42,11 @@ pipeline {
                             }
                         }
                     }
-
                     parallel scanStages
                 }
             }
         }
+
         stage('Generate SBOMs (Syft)') {
             steps {
                 script {
@@ -62,11 +61,19 @@ pipeline {
                 }
             }
         }
+
+        stage('Deploy (docker compose up)') {
+            steps {
+                echo "🚀 Bringing up all services with docker compose up..."
+                sh 'docker compose up -d'
+            }
+        }
     }
 
     post {
         always {
             sh 'docker images'
+            sh 'docker compose ps || true'
         }
     }
 }
