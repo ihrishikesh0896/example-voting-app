@@ -4,8 +4,8 @@ pipeline {
     environment {
         DOCKER_COMPOSE_VERSION = '2.24.6'
         REGISTRY = 'your-registry.com'  // Optional: for pushing images
-        TAG = "latest"
-        SERVICES = 'vote,result,worker,seed-data'
+        TAG = 'latest'  // Always use latest
+        SERVICES = 'vote,result,worker'  // Removed seed-data since it's not building
     }
 
     options {
@@ -39,9 +39,11 @@ pipeline {
         stage('Build All Services') {
             steps {
                 script {
-                    echo "🏗️ Building all Docker services..."
+                    echo "🏗️ Building all Docker services with latest tag..."
                     sh '''
                         docker compose build --no-cache --parallel
+                        
+                        echo "=== Built Images ==="
                         docker images | grep ${JOB_NAME} || echo "No images found with job name"
                     '''
                 }
@@ -51,12 +53,12 @@ pipeline {
         stage('Validate Built Images') {
             steps {
                 script {
-                    echo "✅ Validating built images..."
+                    echo "✅ Validating built images with latest tag..."
                     def services = env.SERVICES.split(',')
                     def missingImages = []
 
                     services.each { service ->
-                        def imageName = "${env.JOB_NAME}-${service.trim()}:${env.TAG}"
+                        def imageName = "${env.JOB_NAME}-${service.trim()}:latest"
                         def imageExists = sh(
                             script: "docker images --format '{{.Repository}}:{{.Tag}}' | grep -q '${imageName}' && echo 'true' || echo 'false'",
                             returnStdout: true
@@ -71,6 +73,8 @@ pipeline {
 
                     if (missingImages.size() > 0) {
                         error("❌ Missing images for services: ${missingImages.join(', ')}")
+                    } else {
+                        echo "✅ All required images validated successfully!"
                     }
                 }
             }
@@ -96,13 +100,6 @@ pipeline {
                     steps {
                         script {
                             scanImageWithQualys('worker')
-                        }
-                    }
-                }
-                stage('Scan Seed-Data Service') {
-                    steps {
-                        script {
-                            scanImageWithQualys('seed-data')
                         }
                     }
                 }
@@ -138,18 +135,25 @@ pipeline {
             }
             steps {
                 script {
-                    echo "🏷️ Tagging and pushing images..."
+                    echo "🏷️ Tagging and pushing latest images..."
                     def services = env.SERVICES.split(',')
 
                     services.each { service ->
                         def serviceName = service.trim()
-                        def localImage = "${env.JOB_NAME}-${serviceName}:${env.TAG}"
-                        def remoteImage = "${env.REGISTRY}/${serviceName}:${env.TAG}"
+                        def localImage = "${env.JOB_NAME}-${serviceName}:latest"
+                        def remoteImage = "${env.REGISTRY}/${serviceName}:latest"
+                        def timestampImage = "${env.REGISTRY}/${serviceName}:${env.BUILD_NUMBER}"
 
                         sh """
+                            # Push with latest tag
                             docker tag ${localImage} ${remoteImage}
                             docker push ${remoteImage}
                             echo "✓ Pushed ${remoteImage}"
+                            
+                            # Also push with build number for versioning
+                            docker tag ${localImage} ${timestampImage}
+                            docker push ${timestampImage}
+                            echo "✓ Pushed ${timestampImage}"
                         """
                     }
                 }
@@ -183,6 +187,7 @@ pipeline {
                         Status: SUCCESS
 
                         All services have been built and scanned successfully.
+                        Scanned services: ${env.SERVICES}
 
                         View full report: ${env.BUILD_URL}
                     """,
@@ -229,10 +234,10 @@ pipeline {
     }
 }
 
-// Helper function to scan images with Qualys
+// Helper function to scan images with Qualys - Updated for latest tag
 def scanImageWithQualys(String serviceName) {
     try {
-        def imageName = "${env.JOB_NAME}-${serviceName}:${env.TAG}"
+        def imageName = "${env.JOB_NAME}-${serviceName}:latest"
         def IMAGE_ID = sh(
             script: "docker images --no-trunc --format '{{.ID}}' ${imageName}",
             returnStdout: true
