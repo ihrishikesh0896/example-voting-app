@@ -3,199 +3,60 @@ pipeline {
 
     environment {
         DOCKER_COMPOSE_VERSION = '2.24.6'
-        REGISTRY = 'your-registry.com'      // Change to your actual registry
+        IMAGE_TO_SCAN = 'vote'   // Change to the service you want to scan, e.g. vote/result/worker/seed-data
         TAG = 'latest'
-        SERVICES = 'vote,result,worker'     // Comma-separated, no spaces
-    }
-
-    options {
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-        timeout(time: 30, unit: 'MINUTES')
-        timestamps()
     }
 
     stages {
         stage('Checkout') {
             steps {
-                echo "🔄 Checking out source code..."
-                checkout scm
+                git 'https://github.com/ihrishikesh0896/example-voting-app.git'
             }
         }
-
-        stage('Pre-build Cleanup') {
+        stage('Build Images') {
             steps {
-                echo "🧹 Cleaning up previous builds and images..."
                 sh '''
-                    docker system prune -f --volumes || true
-                    docker compose down --remove-orphans || true
+                  docker compose build
                 '''
             }
         }
-
-        stage('Build All Services') {
-            steps {
-                echo "🏗️ Building all Docker services with latest tag..."
-                sh '''
-                    docker compose build --no-cache --parallel
-                    echo "=== Built Images ==="
-                    docker images
-                '''
-            }
-        }
-
-        stage('Validate Built Images') {
+        stage('Get Image ID for Scan') {
             steps {
                 script {
-                    echo "✅ Validating built images with latest tag..."
-                    def services = env.SERVICES.split(',')
-                    def missingImages = []
-                    def foundImages = []
-
-                    // Print all images for troubleshooting
-                    sh 'docker images'
-
-                    services.each { svc ->
-                        def service = svc.trim()
-                        def imageName = "${env.JOB_NAME}-${service}:${env.TAG}"
-
-                        // Robust check using returnStatus
-                        def status = sh(
-                            script: "docker images --format '{{.Repository}}:{{.Tag}}' | grep -w '${imageName}'",
-                            returnStatus: true
-                        )
-                        if (status == 0) {
-                            echo "✓ Found image: ${imageName}"
-                            foundImages << imageName
-                        } else {
-                            echo "❌ Missing image: ${imageName}"
-                            missingImages << imageName
-                        }
-                    }
-
-                    if (missingImages) {
-                        error("❌ Missing images for: ${missingImages.join(', ')}")
-                    }
-                    echo "✅ All required images validated: ${foundImages.join(', ')}"
+                    def imageName = "${env.JOB_NAME}-${env.IMAGE_TO_SCAN}:${env.TAG}"
+                    def IMAGE_ID = sh(
+                        script: "docker images --no-trunc --format '{{.ID}}' ${imageName}",
+                        returnStdout: true
+                    ).trim()
+                    env.IMAGE_ID = IMAGE_ID
+                    echo "Will scan Docker image: ${imageName} (ID: ${env.IMAGE_ID})"
                 }
             }
         }
-
-        stage('Security Scanning') {
-            parallel {
-                stage('Scan Vote Service') {
-                    steps {
-                        script {
-                            scanImageWithQualys('vote')
-                        }
-                    }
-                }
-                stage('Scan Result Service') {
-                    steps {
-                        script {
-                            scanImageWithQualys('result')
-                        }
-                    }
-                }
-                stage('Scan Worker Service') {
-                    steps {
-                        script {
-                            scanImageWithQualys('worker')
-                        }
-                    }
-                }
+        stage('Scan all images with Qualys') {
+    steps {
+        script {
+            def services = ['vote', 'result', 'worker', 'seed-data']
+            for (svc in services) {
+                def imageName = "${env.JOB_NAME}-${svc}:${env.TAG}"
+                def IMAGE_ID = sh(
+                    script: "docker images --no-trunc --format '{{.ID}}' ${imageName}",
+                    returnStdout: true
+                ).trim()
+                echo "Scanning image: ${imageName} (${IMAGE_ID})"
+                getImageVulnsFromQualys(
+                    useGlobalConfig: true,
+                    imageIds: IMAGE_ID
+                )
             }
-        }
-
-        stage('Generate Security Report') {
-            steps {
-                echo "📊 (Optional) Generate consolidated security report here."
-                // Archive or publish scan results as needed by your Qualys plugin/output
-                // archiveArtifacts artifacts: '**/qualys-scan-*.json', allowEmptyArchive: true
-            }
-        }
-
-        stage('Tag and Push Images') {
-            when {
-                anyOf {
-                    branch 'main'
-                    branch 'develop'
-                }
-            }
-            steps {
-                script {
-                    echo "🏷️ Tagging and pushing latest images..."
-                    def services = env.SERVICES.split(',')
-
-                    services.each { svc ->
-                        def service = svc.trim()
-                        def localImage = "${env.JOB_NAME}-${service}:${env.TAG}"
-                        def remoteImage = "${env.REGISTRY}/${service}:${env.TAG}"
-                        def timestampImage = "${env.REGISTRY}/${service}:${env.BUILD_NUMBER}"
-
-                        sh """
-                            docker tag ${localImage} ${remoteImage}
-                            docker push ${remoteImage}
-                            echo "✓ Pushed ${remoteImage}"
-
-                            docker tag ${localImage} ${timestampImage}
-                            docker push ${timestampImage}
-                            echo "✓ Pushed ${timestampImage}"
-                        """
-                    }
-                }
-            }
-        }
-    }
-
-    post {
-        always {
-            echo "📋 Pipeline execution summary:"
-            sh '''
-                echo "=== Built Images ==="
-                docker images | grep ${JOB_NAME} || echo "No images found"
-                echo "=== Docker System Info ==="
-                docker system df
-            '''
-        }
-        success {
-            echo "✅ Pipeline completed successfully!"
-            // Add notifications here if needed
-        }
-        failure {
-            echo "❌ Pipeline failed! Check the log above for details."
-            // Add notifications here if needed
-        }
-        cleanup {
-            echo "🧹 Cleaning up resources..."
-            sh '''
-                docker compose down --remove-orphans || true
-                docker image prune -f || true
-                find . -name "*.log" -mtime +3 -delete || true
-            '''
         }
     }
 }
 
-// Helper function for scanning with Qualys
-def scanImageWithQualys(String serviceName) {
-    def imageName = "${env.JOB_NAME}-${serviceName}:${env.TAG}"
-    def IMAGE_ID = sh(
-        script: "docker images --no-trunc --format '{{.ID}}' ${imageName}",
-        returnStdout: true
-    ).trim()
-
-    if (IMAGE_ID) {
-        echo "🔍 Scanning ${serviceName} service (Image: ${imageName}, ID: ${IMAGE_ID})"
-        // Adjust parameters below as per your Qualys plugin version
-        getImageVulnsFromQualys(
-            useGlobalConfig: true,
-            imageIds: IMAGE_ID,
-            isSev3Vulns: true, // Medium
-            isSev4Vulns: true, // High
-            isSev5Vulns: true  // Critical
-        )
-        echo "✅ Scan completed for ${serviceName}"
-    } else {
-        error("❌ Could not find image ID for ${imageName}")
+    }
+    post {
+        always {
+            sh 'docker images'
+        }
     }
 }
