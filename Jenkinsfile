@@ -33,7 +33,7 @@ pipeline {
                 }
             }
         }
-        stage('Scan all images with Qualys') {
+    stage('Scan all images with Qualys') {
     steps {
         script {
             def services = ['vote', 'result', 'worker', 'seed-data']
@@ -43,14 +43,20 @@ pipeline {
                     script: "docker images --no-trunc --format '{{.ID}}' ${imageName}",
                     returnStdout: true
                 ).trim()
-                echo "Scanning image: ${imageName} (${IMAGE_ID})"
-                getImageVulnsFromQualys(
-                    useGlobalConfig: true,
-                    imageIds: IMAGE_ID
-                )
+                if (IMAGE_ID) {
+                    echo "🔍 Scanning image: ${imageName} (${IMAGE_ID})"
+                    getImageVulnsFromQualys(
+                        useGlobalConfig: true,
+                        imageIds: IMAGE_ID
+                    )
+                } else {
+                    echo "⏭️  Skipping scan: ${imageName} not built."
+                }
             }
         }
     }
+}
+
 }
 
     }
